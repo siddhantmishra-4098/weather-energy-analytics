@@ -158,6 +158,8 @@ jupyter notebook notebooks/generation_model.ipynb   # -> data/processed/generati
 streamlit run dashboard.py              # opens the dashboard in your browser
 ```
 
+**Live dashboard:** https://weather-energy-analytics.streamlit.app/. `data/raw/` and `data/processed/` are gitignored (see Project structure below), so `dashboard.py` bootstraps its own data on first load if those files are missing: it runs `ingest_weather.py`, `ingest_energy.py`, `ingest_price.py` (best-effort), and `analysis.py` as subprocesses before rendering, so the deployed app always reflects a real pipeline run rather than a static, aging snapshot. First load takes a couple of minutes (mostly API calls); later loads on a warm instance are instant. `packages.txt` (`libeccodes-dev`) is included for Streamlit Community Cloud, since `cfgrib` needs the system ecCodes library that plain `pip install` cannot provide. An `ENTSOE_API_TOKEN` can be set under the deployment's Settings -> Secrets to use ENTSO-E instead of the default, keyless SMARD source.
+
 Each ingest script fails loudly (non-zero exit, clear error message) if its API call fails. There is no silent fallback to fake or mocked data.
 
 ## Design notes and known limitations
@@ -191,6 +193,7 @@ weather-energy-analytics/
 │   └── analyze_energy_bias_by_hour.py
 ├── dashboard.py
 ├── requirements.txt
+├── packages.txt         # apt deps for Streamlit Community Cloud (libeccodes-dev)
 ├── .env.example
 ├── .gitignore
 └── README.md

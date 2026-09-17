@@ -31,6 +31,3 @@ jupyter>=1.1
 ipykernel>=7.3
 nbconvert>=7.17
 
-# --- PDF report (Claude outputs/build_report_pdf.py) ---
-reportlab>=5.0
-pymupdf>=1.28          # renders report pages to PNG for visual QA

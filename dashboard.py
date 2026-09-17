@@ -20,6 +20,9 @@ Run with:  streamlit run dashboard.py
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -32,6 +35,64 @@ RAW_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
 st.set_page_config(page_title="Weather x Energy Analytics -- Germany", layout="wide")
+
+# Data (data/raw, data/processed) is gitignored by design -- see README's Design
+# notes -- so a fresh clone or a fresh cloud deployment has none of it. Rather than
+# shipping a static, aging snapshot into the repo, the dashboard runs the real
+# ingest/analysis pipeline itself on first load if the required files are missing.
+# This keeps the project's own "no fake or stale data" rule intact for the live
+# dashboard too, at the cost of a slower first load (a couple of minutes, mostly
+# API calls). Subsequent loads on a warm container are instant, since the check
+# below is skipped once the files exist.
+REQUIRED_FOR_PIPELINE = [
+    RAW_DIR / "weather_historical.parquet",
+    RAW_DIR / "weather_forecast.parquet",
+    RAW_DIR / "energy_actuals.parquet",
+    PROCESSED_DIR / "weather_energy_joined.parquet",
+    PROCESSED_DIR / "correlation_matrix.csv",
+    PROCESSED_DIR / "forecast_accuracy.csv",
+]
+
+
+def _run_step(script: str, env: dict) -> tuple[bool, str]:
+    """Runs one pipeline script as a subprocess (not an import) so each script's
+    own __main__ guard, argument parsing, and sys.exit(1)-on-API-failure behavior
+    are respected exactly as when run from the command line."""
+    result = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "src" / script)],
+        cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=600,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr)[-4000:]
+
+
+@st.cache_resource(show_spinner=False)
+def bootstrap_pipeline() -> tuple[bool, list[str]]:
+    """Runs the ingest -> analysis pipeline once per running app instance (cached
+    via cache_resource, not cache_data, since this has side effects on disk rather
+    than returning a value to cache) if any required output is missing. Optional
+    price ingest is attempted but not required -- Section 6-equivalent features
+    degrade gracefully, same as when run locally without an ENTSO-E token."""
+    if all(p.exists() for p in REQUIRED_FOR_PIPELINE):
+        return True, ["Data already present -- skipping pipeline."]
+
+    env = os.environ.copy()
+    # On Streamlit Community Cloud, set ENTSOE_API_TOKEN under Settings -> Secrets
+    # if you want ENTSO-E instead of the default, keyless SMARD source.
+    if "ENTSOE_API_TOKEN" in st.secrets:
+        env["ENTSOE_API_TOKEN"] = st.secrets["ENTSOE_API_TOKEN"]
+
+    log = []
+    for script, required in [
+        ("ingest_weather.py", True),
+        ("ingest_energy.py", True),
+        ("ingest_price.py", False),
+        ("analysis.py", True),
+    ]:
+        ok, output = _run_step(script, env)
+        log.append(f"$ python src/{script}\n{output}")
+        if not ok and required:
+            return False, log
+    return True, log
 
 
 @st.cache_data
@@ -86,6 +147,18 @@ def load_data():
         "energy_fcst": energy_fcst,
     }, []
 
+
+with st.spinner(
+    "First run: fetching weather/energy data and building the joined dataset "
+    "(a couple of minutes, mostly API calls)..."
+):
+    pipeline_ok, pipeline_log = bootstrap_pipeline()
+
+if not pipeline_ok:
+    st.error("Pipeline failed while bootstrapping data for this dashboard. Log:")
+    for entry in pipeline_log:
+        st.code(entry)
+    st.stop()
 
 data, missing_files = load_data()
 
